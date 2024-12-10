@@ -1,0 +1,96 @@
+#!/bin/bash
+
+# Constants
+KUBECONFIG="${HOME}/.kube/config"
+TEMP_CONTEXT_FILE="/tmp/kube-contexts-$$"
+DIALOG_TITLE="Kubernetes Context Switcher"
+
+# Function to clean up temporary files
+cleanup() {
+    rm -f "${TEMP_CONTEXT_FILE}"
+}
+
+# Function to check if required commands exist
+check_requirements() {
+    local required_commands=("kubectl" "dialog" "awk" "grep")
+    
+    for cmd in "${required_commands[@]}"; do
+        if ! command -v "${cmd}" &> /dev/null; then
+            echo "Error: Required command '${cmd}' not found. Please install it first."
+            exit 1
+        fi
+    done
+}
+
+# Function to check if kubeconfig exists
+check_kubeconfig() {
+    if [ ! -f "${KUBECONFIG}" ]; then
+        echo "Error: Kubeconfig file not found at ${KUBECONFIG}"
+        exit 1
+    fi
+}
+
+# Function to get current context
+get_current_context() {
+    kubectl config current-context 2>/dev/null || echo "None"
+}
+
+# Function to get available contexts
+get_contexts() {
+    kubectl config get-contexts --no-headers | awk '{print NR " " $2}' > "${TEMP_CONTEXT_FILE}"
+}
+
+# Function to show context selection dialog
+show_context_dialog() {
+    local current_context="$1"
+    local contexts=$(paste -s "${TEMP_CONTEXT_FILE}")
+    
+    dialog --stdout \
+           --title "${DIALOG_TITLE}" \
+           --menu "Current Context: ${current_context}\nSelect new context:" \
+           0 0 0 ${contexts}
+}
+
+# Function to switch context
+switch_context() {
+    local selection="$1"
+    local new_context=$(sed -n "${selection}p" "${TEMP_CONTEXT_FILE}" | awk '{print $2}')
+    
+    if [ -n "${new_context}" ]; then
+        kubectl config use-context "${new_context}"
+        if [ $? -eq 0 ]; then
+            dialog --title "Success" \
+                   --msgbox "Successfully switched to context: ${new_context}" \
+                   8 40
+        else
+            dialog --title "Error" \
+                   --msgbox "Failed to switch context!" \
+                   8 40
+        fi
+    fi
+}
+
+# Main execution
+main() {
+    # Set up trap for cleanup
+    trap cleanup EXIT
+    
+    # Check requirements
+    check_requirements
+    check_kubeconfig
+    
+    # Get current and available contexts
+    current_context=$(get_current_context)
+    get_contexts
+    
+    # Show dialog and get selection
+    selection=$(show_context_dialog "${current_context}")
+    
+    # Check if user cancelled
+    if [ $? -eq 0 ] && [ -n "${selection}" ]; then
+        switch_context "${selection}"
+    fi
+}
+
+# Run main function
+main
